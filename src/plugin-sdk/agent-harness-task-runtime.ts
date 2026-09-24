@@ -21,6 +21,7 @@ import {
   resolveAnnounceOrigin,
   resolveSubagentCompletionOrigin,
 } from "../agents/subagents/announce/subagent-announce-origin.js";
+import { withoutGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
 import {
   getGatewayContextResolver,
   withPluginRuntimeGatewayContextResolver,
@@ -356,9 +357,15 @@ export async function deliverAgentHarnessTaskCompletion(params: {
     });
   };
   const resolveGatewayContext = getGatewayContextResolver(scope);
-  return resolveGatewayContext
-    ? await withPluginRuntimeGatewayContextResolver(resolveGatewayContext, deliver)
-    : await deliver();
+  // Completion is owned by the task, not by the turn that spawned it. A monitor
+  // callback or retry timer can still carry the retired (e.g. yielded) turn's
+  // tool-caller identity, whose revoked authority would reject every direct
+  // announce. The scope's Gateway resolver and admission gates still apply.
+  return await withoutGatewayToolCallerIdentity(() =>
+    resolveGatewayContext
+      ? withPluginRuntimeGatewayContextResolver(resolveGatewayContext, deliver)
+      : deliver(),
+  );
 }
 
 function mapHarnessCompletionStatus(

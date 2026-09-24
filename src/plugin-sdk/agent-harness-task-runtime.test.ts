@@ -10,6 +10,11 @@ import {
   resolveAnnounceOrigin,
   resolveSubagentCompletionOrigin,
 } from "../agents/subagents/announce/subagent-announce-origin.js";
+import {
+  captureGatewayToolCallerAssertion,
+  getGatewayToolCallerIdentity,
+  withGatewayToolCallerIdentity,
+} from "../agents/tools/gateway-caller-context.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { createAgentHarnessTaskRuntimeScope } from "../tasks/agent-harness-task-runtime-scope.js";
@@ -426,6 +431,60 @@ describe("agent-harness-task-runtime", () => {
       }
     },
   );
+
+  it("delivers a detached completion outside a retired yielded turn's caller authority", async () => {
+    // Production 2026-09-24: a Codex parent turn yielded (sessions_yield), its native
+    // child finished, and every completion retry failed with "agent tool caller
+    // authority is no longer active" because the retry inherited the yielded turn's
+    // revoked tool-caller identity. The in-process "agent" dispatch asserts that
+    // ambient caller, so delivery never reached the requester.
+    let yieldedTurnActive = true;
+    const observed: Array<{ caller: unknown; assertion: unknown; scopeContext: unknown }> = [];
+    vi.mocked(deliverSubagentAnnouncement).mockImplementation(async () => {
+      const assertion = captureGatewayToolCallerAssertion();
+      observed.push({
+        caller: getGatewayToolCallerIdentity(),
+        assertion,
+        scopeContext: getPluginRuntimeGatewayRequestScope()?.resolveGatewayContext?.(),
+      });
+      // Mirrors resolveInProcessGatewayDispatch for a non-host-owned "agent" call.
+      assertion?.("agent");
+      return { delivered: true, path: "direct" };
+    });
+    const gatewayContext = { marker: "live-gateway" };
+    const scope = createAgentHarnessTaskRuntimeScope({
+      requesterSessionKey: "agent:digg:discord:channel:1529384241245323324",
+      gatewayContextResolver: () => gatewayContext as never,
+    });
+    const deliverFromRetiredTurn = () =>
+      withGatewayToolCallerIdentity(
+        {
+          agentId: "digg",
+          sessionKey: "agent:digg:discord:channel:1529384241245323324",
+          operationalRunInstance: { runId: "yielded-run", instanceId: "yielded-instance" },
+          receiptAuthority: () => yieldedTurnActive,
+        },
+        () =>
+          deliverAgentHarnessTaskCompletion({
+            scope,
+            childSessionKey: "codex-thread:parent:turn:child",
+            childSessionId: "child-thread",
+            announceId: "codex-native:parent:child:succeeded",
+            status: "succeeded",
+            result: "worker finished",
+          }),
+      );
+
+    yieldedTurnActive = false;
+    await expect(deliverFromRetiredTurn()).resolves.toMatchObject({
+      delivered: true,
+      path: "direct",
+    });
+    expect(deliverSubagentAnnouncement).toHaveBeenCalledOnce();
+    expect(observed).toEqual([
+      { caller: undefined, assertion: undefined, scopeContext: gatewayContext },
+    ]);
+  });
 
   it("checks durable direct delivery phases", () => {
     expect(
