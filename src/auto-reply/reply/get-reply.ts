@@ -1012,30 +1012,34 @@ export async function getReplyFromConfig(
   let resolveRunModelLevels = resolveModelLevels;
   if (runAutoFallbackPrimaryProbe) {
     try {
-      runModelState = await createModelSelectionState({
-        cfg,
-        agentId,
-        agentCfg,
-        sessionEntry,
-        sessionStore,
-        sessionKey,
-        parentSessionKey:
-          sessionEntry.parentSessionKey ??
-          sessionCtx.ModelParentSessionKey ??
-          sessionCtx.ParentSessionKey,
-        storePath,
-        defaultProvider,
-        defaultModel,
-        primaryProvider,
-        primaryModel,
-        provider: runProvider,
-        model: runModel,
-        hasModelDirective: false,
-        skipStoredModelOverride: true,
-        hasResolvedHeartbeatModelOverride,
-        isHeartbeat: opts?.isHeartbeat === true,
-        preparedModelCatalog,
-      });
+      // Traced so a slow prepared-catalog read is attributed instead of appearing
+      // as an unexplained gap before before_run_prepared_reply.
+      runModelState = await traceGetReplyPhase("reply.resolve_auto_fallback_probe_state", () =>
+        createModelSelectionState({
+          cfg,
+          agentId,
+          agentCfg,
+          sessionEntry,
+          sessionStore,
+          sessionKey,
+          parentSessionKey:
+            sessionEntry.parentSessionKey ??
+            sessionCtx.ModelParentSessionKey ??
+            sessionCtx.ParentSessionKey,
+          storePath,
+          defaultProvider,
+          defaultModel,
+          primaryProvider,
+          primaryModel,
+          provider: runProvider,
+          model: runModel,
+          hasModelDirective: false,
+          skipStoredModelOverride: true,
+          hasResolvedHeartbeatModelOverride,
+          isHeartbeat: opts?.isHeartbeat === true,
+          preparedModelCatalog,
+        }),
+      );
     } catch (error) {
       if (
         !(error instanceof ModelSelectionLockedError) &&
@@ -1070,17 +1074,22 @@ export async function getReplyFromConfig(
         provider: runModelState.provider,
         model: runModelState.model,
         thinkLevel: hasTurnOrSessionThinkLevel
-          ? (await resolveModelLevels()).resolvedThinkLevel
+          ? (await traceGetReplyPhase("reply.resolve_base_model_levels", resolveModelLevels))
+              .resolvedThinkLevel
           : undefined,
         thinkingExplicit: hasExplicitThinkLevel,
         reasoningLevel: hasExplicitReasoningLevel
-          ? (await resolveModelLevels()).resolvedReasoningLevel
+          ? (await traceGetReplyPhase("reply.resolve_base_model_levels", resolveModelLevels))
+              .resolvedReasoningLevel
           : "off",
         reasoningExplicit: hasExplicitReasoningLevel,
       },
     });
   }
-  const { resolvedThinkLevel, resolvedReasoningLevel } = await resolveRunModelLevels();
+  const { resolvedThinkLevel, resolvedReasoningLevel } = await traceGetReplyPhase(
+    "reply.resolve_run_model_levels",
+    resolveRunModelLevels,
+  );
 
   let stagedAttachmentPaths = hasStagedMediaFacts(finalized.media)
     ? collectStagedAttachmentPaths(finalized)

@@ -22,6 +22,10 @@ import {
   resolveSubagentCompletionOrigin,
 } from "../agents/subagents/announce/subagent-announce-origin.js";
 import {
+  getGatewayToolCallerIdentity,
+  withoutGatewayToolCallerIdentity,
+} from "../agents/tools/gateway-caller-context.js";
+import {
   getGatewayContextResolver,
   withPluginRuntimeGatewayContextResolver,
 } from "../plugins/runtime/gateway-request-scope.js";
@@ -356,9 +360,20 @@ export async function deliverAgentHarnessTaskCompletion(params: {
     });
   };
   const resolveGatewayContext = getGatewayContextResolver(scope);
-  return resolveGatewayContext
-    ? await withPluginRuntimeGatewayContextResolver(resolveGatewayContext, deliver)
-    : await deliver();
+  const run = () =>
+    resolveGatewayContext
+      ? withPluginRuntimeGatewayContextResolver(resolveGatewayContext, deliver)
+      : deliver();
+  // Completion is owned by the task, not by the turn that spawned it. A monitor
+  // callback or retry timer can still carry a retired (e.g. yielded) channel
+  // turn's tool-caller identity, whose closed receipt authority would reject
+  // every direct announce. Such a caller contributes no scope ceiling, so it is
+  // dropped. An operator-authorized caller is retained: its scopes still narrow
+  // this dispatch, and its revocation still fails closed.
+  const ambientCaller = getGatewayToolCallerIdentity();
+  return ambientCaller && !ambientCaller.operatorAuthority
+    ? await withoutGatewayToolCallerIdentity(run)
+    : await run();
 }
 
 function mapHarnessCompletionStatus(
