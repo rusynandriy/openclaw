@@ -1074,11 +1074,13 @@ export async function getReplyFromConfig(
         provider: runModelState.provider,
         model: runModelState.model,
         thinkLevel: hasTurnOrSessionThinkLevel
-          ? (await resolveModelLevels()).resolvedThinkLevel
+          ? (await traceGetReplyPhase("reply.resolve_base_model_levels", resolveModelLevels))
+              .resolvedThinkLevel
           : undefined,
         thinkingExplicit: hasExplicitThinkLevel,
         reasoningLevel: hasExplicitReasoningLevel
-          ? (await resolveModelLevels()).resolvedReasoningLevel
+          ? (await traceGetReplyPhase("reply.resolve_base_model_levels", resolveModelLevels))
+              .resolvedReasoningLevel
           : "off",
         reasoningExplicit: hasExplicitReasoningLevel,
       },

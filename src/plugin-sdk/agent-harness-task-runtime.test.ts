@@ -486,6 +486,51 @@ describe("agent-harness-task-runtime", () => {
     ]);
   });
 
+  it("keeps an operator-authorized caller's ceiling and revocation on completion delivery", async () => {
+    let operatorActive = true;
+    const operatorAuthority = {
+      profileId: "operator-1",
+      scopes: ["operator.read"],
+      assertCurrent: () => {
+        if (!operatorActive) {
+          throw new Error("admitted run operator authority is no longer active");
+        }
+      },
+    };
+    const seen: unknown[] = [];
+    vi.mocked(deliverSubagentAnnouncement).mockImplementation(async () => {
+      seen.push(getGatewayToolCallerIdentity()?.operatorAuthority);
+      captureGatewayToolCallerAssertion()?.("agent");
+      return { delivered: true, path: "direct" };
+    });
+    const deliverAsOperator = () =>
+      withGatewayToolCallerIdentity(
+        {
+          agentId: "main",
+          sessionKey: "agent:main:main",
+          operationalRunInstance: { runId: "operator-run", instanceId: "operator-instance" },
+          operatorAuthority,
+          receiptAuthority: () => true,
+        },
+        () =>
+          deliverAgentHarnessTaskCompletion({
+            scope: createScope("agent:main:main"),
+            childSessionKey: "codex-thread:parent:turn:child",
+            childSessionId: "child-thread",
+            announceId: "codex-native:parent:child:succeeded",
+            status: "succeeded",
+            result: "worker finished",
+          }),
+      );
+
+    await expect(deliverAsOperator()).resolves.toMatchObject({ delivered: true });
+    expect(seen).toEqual([operatorAuthority]);
+    operatorActive = false;
+    await expect(deliverAsOperator()).rejects.toThrow(
+      "admitted run operator authority is no longer active",
+    );
+  });
+
   it("checks durable direct delivery phases", () => {
     expect(
       isDurableAgentHarnessCompletionDelivery({
